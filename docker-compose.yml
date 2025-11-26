@@ -3,6 +3,15 @@ version: '3.8'
 # ==========================================
 # YPrompt Docker Compose 配置
 # 适配 Traefik 反向代理
+# 
+# 使用前提：
+# 1. 已有 Traefik 运行并创建了外部网络
+# 2. 创建 .env 文件配置域名和密钥
+#
+# 快速启动：
+# docker-compose up -d
+# 
+# 如果不使用 Traefik，请使用 docker-compose.standalone.yml
 # ==========================================
 
 services:
@@ -11,10 +20,6 @@ services:
     container_name: yprompt
     restart: unless-stopped
     
-    # 不直接暴露端口，通过 Traefik 访问
-    # ports:
-    #   - "8888:8888"
-    
     volumes:
       - ./data:/app/data
     
@@ -22,6 +27,7 @@ services:
       # 后端配置
       - YPROMPT_PORT=8888
       - YPROMPT_HOST=0.0.0.0
+      - YPROMPT_WORKERS=1
       
       # 数据库配置
       - DB_TYPE=sqlite
@@ -56,19 +62,12 @@ services:
       # 服务配置
       - "traefik.http.services.yprompt.loadbalancer.server.port=8888"
       
-      # HTTP 重定向到 HTTPS（可选）
+      # HTTP 重定向到 HTTPS（可选，取消注释启用）
       # - "traefik.http.routers.yprompt.middlewares=redirect-to-https"
       # - "traefik.http.middlewares.redirect-to-https.redirectscheme.scheme=https"
     
     networks:
       - traefik-network
-    
-    healthcheck:
-      test: ["CMD", "curl", "-sf", "http://localhost:8888/api/auth/config"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 30s
 
 networks:
   traefik-network:

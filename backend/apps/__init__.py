@@ -45,8 +45,18 @@ def configure_blueprints(sanic_app):
             logger.error(f"❌ 注册蓝图失败 [{modname}]: {e}")
 
 
+# 全局标记，防止静态文件配置被重复调用
+_static_files_configured = False
+
 def configure_static_files(sanic_app):
     """配置前端静态文件服务（用于 Docker 部署，Traefik 反代场景）"""
+    global _static_files_configured
+    
+    # 防止重复配置
+    if _static_files_configured:
+        logger.debug("静态文件服务已配置，跳过重复配置")
+        return
+    
     # 获取静态文件目录，默认为 /app/frontend/dist
     static_path = os.environ.get('STATIC_PATH', '/app/frontend/dist')
     
@@ -62,13 +72,22 @@ def configure_static_files(sanic_app):
     
     logger.info(f"✅ 配置静态文件服务: {static_path}")
     
+    # 标记已配置
+    _static_files_configured = True
+    
     # 注册静态文件目录（用于 js/css/images 等资源）
-    sanic_app.static('/assets', os.path.join(static_path, 'assets'), name='assets')
+    try:
+        sanic_app.static('/assets', os.path.join(static_path, 'assets'), name='assets')
+    except Exception as e:
+        logger.debug(f"静态资源目录可能已注册: {e}")
     
     # 处理 favicon.ico
     favicon_path = os.path.join(static_path, 'favicon.ico')
     if os.path.exists(favicon_path):
-        sanic_app.static('/favicon.ico', favicon_path, name='favicon')
+        try:
+            sanic_app.static('/favicon.ico', favicon_path, name='favicon')
+        except Exception as e:
+            logger.debug(f"favicon 可能已注册: {e}")
     
     # SPA 路由处理：所有非 API 请求返回 index.html
     @sanic_app.route('/', methods=['GET'])

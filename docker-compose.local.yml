@@ -1,16 +1,26 @@
 version: '3.8'
 
 # ==========================================
-# YPrompt 本地开发 Docker Compose 配置
-# 不依赖 Traefik，直接暴露端口
+# YPrompt 本地开发/构建 Docker Compose 配置
+# 从源码构建镜像，直接暴露端口
+#
+# 使用场景：
+# - 本地开发测试
+# - 验证 Dockerfile 构建
+# - 不依赖远程镜像
+#
+# 构建并启动：
+# docker-compose -f docker-compose.local.yml up -d --build
+#
+# 访问地址：http://localhost:8888
 # ==========================================
 
 services:
   yprompt:
-    image: ${YPROMPT_IMAGE:-yprompt:local}
     build:
       context: .
       dockerfile: Dockerfile
+    image: yprompt:local
     container_name: yprompt-local
     restart: unless-stopped
     
@@ -25,12 +35,13 @@ services:
       # 后端配置
       - YPROMPT_PORT=8888
       - YPROMPT_HOST=0.0.0.0
+      - YPROMPT_WORKERS=1
       
       # 数据库配置
       - DB_TYPE=sqlite
       - SQLITE_DB_PATH=/app/data/yprompt.db
       
-      # JWT配置
+      # JWT配置（本地开发用）
       - SECRET_KEY=local-dev-secret-key
       
       # Linux.do OAuth配置（可选）
@@ -41,12 +52,3 @@ services:
       # 默认管理员账号
       - ADMIN_USERNAME=admin
       - ADMIN_PASSWORD=admin123
-    
-    healthcheck:
-      test: ["CMD", "curl", "-sf", "http://localhost:8888/api/auth/config"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 30s
-
-

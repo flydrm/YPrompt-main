@@ -49,7 +49,6 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 # 安装系统依赖
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    curl \
     tzdata \
     && rm -rf /var/lib/apt/lists/* \
     && ln -snf /usr/share/zoneinfo/$TZ /etc/localtime \
@@ -77,10 +76,6 @@ RUN chmod +x /app/start.sh
 
 # 创建必要的目录
 RUN mkdir -p /app/data/logs
-
-# 健康检查
-HEALTHCHECK --interval=30s --timeout=10s --start-period=30s --retries=3 \
-    CMD curl -sf http://localhost:${YPROMPT_PORT}/api/auth/config || exit 1
 
 # 暴露端口（只需要后端端口，Traefik 会处理）
 EXPOSE 8888
