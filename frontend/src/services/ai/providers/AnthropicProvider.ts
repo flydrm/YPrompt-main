@@ -6,61 +6,66 @@ import { ResponseCleaner } from '../utils/ResponseCleaner'
 /**
  * Anthropic Claude API 提供商实现
  * 支持 Claude 系列模型和多模态内容
+ * 
+ * 默认通过后端代理调用，避免 CORS 跨域问题
  */
 export class AnthropicProvider extends BaseProvider {
   /**
-   * 调用 Anthropic API
+   * 调用 Anthropic API（通过后端代理，解决 CORS 问题）
    * @param messages 聊天消息列表
    * @param stream 是否使用流式响应
    * @returns Promise<AIResponse | ReadableStream<Uint8Array>>
    */
   async callAPI(messages: ChatMessage[], stream: boolean): Promise<AIResponse | ReadableStream<Uint8Array>> {
-    // 分离系统消息和对话消息
-    const systemMessage = this.extractSystemMessageText(messages)
-    const conversationMessages = messages.filter(m => m.role !== 'system')
-
-    // 构建Anthropic API URL - 智能处理基础URL和完整URL
     if (!this.config.baseUrl) {
       throw new Error('API URL 未配置')
     }
-    let apiUrl = this.config.baseUrl.trim()
-    if (!apiUrl.includes('/v1/messages')) {
-      // 如果是基础URL，需要拼接路径
-      apiUrl = apiUrl.replace(/\/+$/, '') + '/v1/messages'
-    }
 
-    // 使用传入的模型ID
+    // 分离系统消息和对话消息
+    const systemMessage = this.extractSystemMessageText(messages)
+    const conversationMessages = messages.filter(m => m.role !== 'system')
+    
     const modelId = this.modelId
+    
+    // 构建消息列表
+    const formattedMessages = conversationMessages.map(msg => ({
+      role: msg.role === 'assistant' ? 'assistant' : 'user',
+      content: this.hasMultimodalContent(msg) 
+        ? this.convertToMultimodalContent(msg)
+        : (typeof msg.content === 'string' ? msg.content : (Array.isArray(msg.content) ? msg.content[0]?.text || '' : String(msg.content)))
+    }))
+    
+    // 通过后端代理调用（解决 CORS 问题）
+    const proxyUrl = '/api/ai/chat'
     
     // 对于思考模型使用更长的超时时间
     const isThinkingModel = modelId.includes('claude-3') || modelId.includes('thinking') || modelId.includes('sonnet')
     const timeoutMs = isThinkingModel ? 600000 : 300000 // 思考模型10分钟，普通模型5分钟
+    
+    // 获取认证 Token
+    const token = localStorage.getItem('yprompt_token')
 
-    const response = await this.fetchWithTimeout(apiUrl, {
+    const response = await this.fetchWithTimeout(proxyUrl, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'x-api-key': this.config.apiKey,
-        'anthropic-version': '2023-06-01',
-        'anthropic-dangerous-direct-browser-access': 'true'
+        ...(token && { 'Authorization': `Bearer ${token}` })
       },
       body: JSON.stringify({
+        base_url: this.config.baseUrl.trim(),
+        api_key: this.config.apiKey,
         model: modelId,
-        max_tokens: 60000,
-        system: systemMessage,
-        messages: conversationMessages.map(msg => ({
-          role: msg.role === 'assistant' ? 'assistant' : 'user',
-          content: this.hasMultimodalContent(msg) 
-            ? this.convertToMultimodalContent(msg)
-            : (typeof msg.content === 'string' ? msg.content : (Array.isArray(msg.content) ? msg.content[0]?.text || '' : String(msg.content)))
-        })),
-        ...(stream && { stream: true })
+        messages: formattedMessages,
+        stream: stream,
+        provider_type: 'anthropic',
+        system_message: systemMessage,
+        max_tokens: 60000
       })
     }, timeoutMs)
 
     if (!response.ok) {
       const errorData = await response.json().catch(() => ({}))
-      const error = new Error(`Anthropic API error: ${response.status} ${response.statusText}`)
+      const error = new Error(`API error: ${response.status} ${errorData.message || response.statusText}`)
       ;(error as any).error = errorData
       ;(error as any).status = response.status
       throw error
@@ -70,7 +75,10 @@ export class AnthropicProvider extends BaseProvider {
       return response.body as ReadableStream<Uint8Array>
     } else {
       const data = await response.json()
-      const result = data.content[0]?.text
+      
+      // 处理后端代理的响应格式
+      const responseData = data.data || data
+      const result = responseData.content?.[0]?.text
       
       if (!result || result.trim() === '') {
         throw new Error('API返回空内容')
@@ -81,7 +89,7 @@ export class AnthropicProvider extends BaseProvider {
       
       return {
         content: cleanedResult,
-        finishReason: data.stop_reason
+        finishReason: responseData.stop_reason
       }
     }
   }

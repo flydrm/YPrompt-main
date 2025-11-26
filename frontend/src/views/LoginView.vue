@@ -106,7 +106,7 @@
                   v-model="registerForm.password"
                   type="password"
                   class="form-input"
-                  placeholder="至少8个字符，包含字母和数字"
+                  placeholder="至少6个字符"
                   :disabled="isSubmitting"
                   required
                 />
@@ -130,7 +130,7 @@
 
               <button type="submit" class="btn btn-primary btn-block" :disabled="isSubmitting">
                 <span v-if="isSubmitting">注册中...</span>
-                <span v-else">注册</span>
+                <span v-else>注册</span>
               </button>
             </form>
           </div>
@@ -241,7 +241,9 @@ const handleRegister = async () => {
     )
 
     if (success) {
-      // 注册成功，自动登录
+      // 注册成功，将注册表单数据复制到登录表单，然后自动登录
+      loginForm.value.username = registerForm.value.username
+      loginForm.value.password = registerForm.value.password
       showRegister.value = false
       await handleLocalLogin()
     } else {

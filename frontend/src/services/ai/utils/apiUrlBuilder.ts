@@ -32,20 +32,29 @@ export function buildOpenAIChatUrl(baseUrl: string): string {
 
 /**
  * 构建OpenAI模型列表URL
+ * 
+ * 规则：
+ * - 如果 URL 已包含 /models，直接使用
+ * - 如果 URL 以 / 结尾（如 https://b.xyz/），拼接 models
+ * - 如果 URL 不以 / 结尾（如 https://a.com），拼接 /v1/models
  */
 export function buildOpenAIModelsUrl(baseUrl: string): string {
   if (!baseUrl) {
     throw new Error('API URL 未配置')
   }
 
-  let apiUrl = baseUrl.trim()
+  const apiUrl = baseUrl.trim()
 
+  // 已包含 /models，直接使用
   if (apiUrl.endsWith('/models') || apiUrl.includes('/models?') || apiUrl.includes('/models/')) {
     return apiUrl
-  } else if (apiUrl.includes('/v1')) {
-    return apiUrl.replace(/\/+$/, '') + '/models'
+  }
+
+  // 根据末尾是否有 / 判断是否需要拼接 /v1
+  if (apiUrl.endsWith('/')) {
+    return `${apiUrl}models`
   } else {
-    return apiUrl.replace(/\/+$/, '') + '/v1/models'
+    return `${apiUrl}/v1/models`
   }
 }
 

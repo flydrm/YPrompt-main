@@ -2,10 +2,12 @@
 """
 AI 代理路由
 代理前端对 AI 服务的请求，避免 CORS 跨域问题
+支持流式响应 (SSE)
 """
+import json as json_lib
 import httpx
 from sanic import Blueprint
-from sanic.response import json
+from sanic.response import json, ResponseStream
 from sanic_ext import openapi
 from sanic.log import logger
 
@@ -17,6 +19,8 @@ ai_proxy = Blueprint('ai_proxy', url_prefix='/api/ai')
 
 # 请求超时时间（秒）
 REQUEST_TIMEOUT = 30
+# 聊天请求超时时间（秒）- 流式响应和思考模型需要更长时间
+CHAT_TIMEOUT = 600  # 10分钟，与前端思考模型超时保持一致
 
 
 def _build_models_url(base_url: str) -> str:
@@ -400,4 +404,306 @@ async def _test_google_connection(base_url: str, api_key: str, model: str) -> tu
             return True, '连接成功'
         else:
             return False, f'API 返回 {response.status_code}'
+
+
+# ====================================
+# AI 聊天代理（支持流式响应）
+# ====================================
+
+@ai_proxy.post('/chat')
+@auth_required
+@openapi.summary("AI 聊天代理")
+@openapi.description("代理 AI 聊天请求，支持流式响应，避免 CORS 问题")
+@openapi.secured("BearerAuth")
+@openapi.body({"application/json": dict})
+async def chat_proxy(request):
+    """
+    AI 聊天代理（解决 CORS 问题）
+    
+    支持的提供商类型：
+    - openai: OpenAI 兼容接口（默认）
+    - anthropic: Anthropic Claude
+    - google: Google Gemini
+    """
+    try:
+        data = request.json
+        base_url = data.get('base_url', '').strip()
+        api_key = data.get('api_key', '')
+        model = data.get('model', '')
+        messages = data.get('messages', [])
+        stream = data.get('stream', True)
+        provider_type = data.get('provider_type', 'openai')
+        
+        # 其他可选参数
+        temperature = data.get('temperature', 0.7)
+        max_tokens = data.get('max_tokens', 60000)
+        system_message = data.get('system_message', '')
+        
+        if not all([base_url, api_key, model, messages]):
+            return json({
+                'code': 400,
+                'message': '缺少必要参数: base_url, api_key, model, messages'
+            })
+        
+        # 根据提供商类型选择代理方法
+        if provider_type == 'openai':
+            return await _proxy_openai_chat(base_url, api_key, model, messages, stream, temperature, max_tokens, system_message)
+        elif provider_type == 'anthropic':
+            return await _proxy_anthropic_chat(base_url, api_key, model, messages, stream, temperature, max_tokens, system_message)
+        elif provider_type == 'google':
+            return await _proxy_google_chat(base_url, api_key, model, messages, stream, temperature, max_tokens, system_message)
+        else:
+            # 默认使用 OpenAI 兼容接口
+            return await _proxy_openai_chat(base_url, api_key, model, messages, stream, temperature, max_tokens, system_message)
+            
+    except Exception as e:
+        logger.error(f'❌ AI 聊天代理失败: {e}')
+        return json({
+            'code': 500,
+            'message': f'代理请求失败: {str(e)}'
+        })
+
+
+async def _proxy_openai_chat(base_url: str, api_key: str, model: str, messages: list, 
+                              stream: bool, temperature: float, max_tokens: int,
+                              system_message: str = ''):
+    """代理 OpenAI 兼容接口的聊天请求"""
+    chat_url = _build_chat_url(base_url)
+    
+    headers = {
+        'Authorization': f'Bearer {api_key}',
+        'Content-Type': 'application/json',
+    }
+    
+    # 如果有 system_message 且 messages 中没有 system 消息，则添加到开头
+    final_messages = messages.copy()
+    if system_message:
+        has_system = any(m.get('role') == 'system' for m in messages)
+        if not has_system:
+            final_messages.insert(0, {'role': 'system', 'content': system_message})
+    
+    body = {
+        'model': model,
+        'messages': final_messages,
+        'temperature': temperature,
+        'max_tokens': max_tokens,
+        'stream': stream,
+    }
+    
+    if stream:
+        # 流式响应
+        async def streaming_fn(response):
+            try:
+                async with httpx.AsyncClient(timeout=CHAT_TIMEOUT) as client:
+                    async with client.stream('POST', chat_url, headers=headers, json=body) as resp:
+                        if resp.status_code != 200:
+                            error_body = await resp.aread()
+                            error_data = {"error": f"API returned {resp.status_code}: {error_body.decode('utf-8', errors='replace')[:200]}"}
+                            error_msg = f'data: {json_lib.dumps(error_data, ensure_ascii=False)}\n\n'
+                            await response.write(error_msg.encode('utf-8'))
+                            return
+                        
+                        async for chunk in resp.aiter_bytes():
+                            if chunk:
+                                await response.write(chunk)
+            except Exception as e:
+                logger.error(f'❌ 流式代理出错: {e}')
+                error_data = {"error": str(e)}
+                error_msg = f'data: {json_lib.dumps(error_data, ensure_ascii=False)}\n\n'
+                await response.write(error_msg.encode('utf-8'))
+        
+        return ResponseStream(
+            streaming_fn,
+            content_type='text/event-stream',
+            headers={
+                'Cache-Control': 'no-cache',
+                'Connection': 'keep-alive',
+                'X-Accel-Buffering': 'no',
+            }
+        )
+    else:
+        # 非流式响应
+        async with httpx.AsyncClient(timeout=CHAT_TIMEOUT) as client:
+            response = await client.post(chat_url, headers=headers, json=body)
+            
+            if response.status_code != 200:
+                return json({
+                    'code': response.status_code,
+                    'message': f'AI API 返回错误: {response.text[:500]}'
+                })
+            
+            return json({
+                'code': 200,
+                'data': response.json()
+            })
+
+
+async def _proxy_anthropic_chat(base_url: str, api_key: str, model: str, messages: list,
+                                 stream: bool, temperature: float, max_tokens: int,
+                                 system_message: str = ''):
+    """代理 Anthropic 聊天请求"""
+    # 构建 Anthropic messages URL
+    if not base_url.endswith('/messages'):
+        if base_url.endswith('/'):
+            messages_url = f"{base_url}v1/messages"
+        else:
+            messages_url = f"{base_url}/v1/messages"
+    else:
+        messages_url = base_url
+    
+    headers = {
+        'x-api-key': api_key,
+        'anthropic-version': '2023-06-01',
+        'Content-Type': 'application/json',
+    }
+    
+    body = {
+        'model': model,
+        'messages': messages,
+        'max_tokens': max_tokens,
+        'stream': stream,
+    }
+    
+    # 添加 system 消息（如果有）
+    if system_message:
+        body['system'] = system_message
+    
+    if stream:
+        async def streaming_fn(response):
+            try:
+                async with httpx.AsyncClient(timeout=CHAT_TIMEOUT) as client:
+                    async with client.stream('POST', messages_url, headers=headers, json=body) as resp:
+                        if resp.status_code != 200:
+                            error_body = await resp.aread()
+                            error_data = {"error": f"API returned {resp.status_code}: {error_body.decode('utf-8', errors='replace')[:200]}"}
+                            error_msg = f'data: {json_lib.dumps(error_data, ensure_ascii=False)}\n\n'
+                            await response.write(error_msg.encode('utf-8'))
+                            return
+                        
+                        async for chunk in resp.aiter_bytes():
+                            if chunk:
+                                await response.write(chunk)
+            except Exception as e:
+                logger.error(f'❌ Anthropic 流式代理出错: {e}')
+                error_data = {"error": str(e)}
+                error_msg = f'data: {json_lib.dumps(error_data, ensure_ascii=False)}\n\n'
+                await response.write(error_msg.encode('utf-8'))
+        
+        return ResponseStream(
+            streaming_fn,
+            content_type='text/event-stream',
+            headers={
+                'Cache-Control': 'no-cache',
+                'Connection': 'keep-alive',
+            }
+        )
+    else:
+        async with httpx.AsyncClient(timeout=CHAT_TIMEOUT) as client:
+            response = await client.post(messages_url, headers=headers, json=body)
+            
+            if response.status_code != 200:
+                return json({
+                    'code': response.status_code,
+                    'message': f'Anthropic API 返回错误: {response.text[:500]}'
+                })
+            
+            return json({
+                'code': 200,
+                'data': response.json()
+            })
+
+
+async def _proxy_google_chat(base_url: str, api_key: str, model: str, messages: list,
+                              stream: bool, temperature: float, max_tokens: int,
+                              system_message: str = ''):
+    """代理 Google Gemini 聊天请求"""
+    # 转换消息格式为 Gemini 格式
+    contents = []
+    for msg in messages:
+        role = msg.get('role', 'user')
+        # Google 使用 'user' 和 'model' 角色
+        if role == 'assistant':
+            role = 'model'
+        elif role != 'model':
+            role = 'user'
+        
+        # 处理消息内容（支持 parts 格式和文本格式）
+        parts = msg.get('parts')
+        if parts:
+            # 前端已经转换为 parts 格式
+            contents.append({
+                'role': role,
+                'parts': parts
+            })
+        else:
+            # 简单文本格式
+            content = msg.get('content', '')
+            contents.append({
+                'role': role,
+                'parts': [{'text': content}]
+            })
+    
+    # 构建 URL
+    if stream:
+        generate_url = f"{base_url}/v1beta/models/{model}:streamGenerateContent?key={api_key}&alt=sse"
+    else:
+        generate_url = f"{base_url}/v1beta/models/{model}:generateContent?key={api_key}"
+    
+    body = {
+        'contents': contents,
+        'generationConfig': {
+            'temperature': temperature,
+            'maxOutputTokens': max_tokens,
+        }
+    }
+    
+    # 添加 system_instruction（如果有）
+    if system_message:
+        body['system_instruction'] = {
+            'parts': [{'text': system_message}]
+        }
+    
+    if stream:
+        async def streaming_fn(response):
+            try:
+                async with httpx.AsyncClient(timeout=CHAT_TIMEOUT) as client:
+                    async with client.stream('POST', generate_url, json=body) as resp:
+                        if resp.status_code != 200:
+                            error_body = await resp.aread()
+                            error_data = {"error": f"API returned {resp.status_code}: {error_body.decode('utf-8', errors='replace')[:200]}"}
+                            error_msg = f'data: {json_lib.dumps(error_data, ensure_ascii=False)}\n\n'
+                            await response.write(error_msg.encode('utf-8'))
+                            return
+                        
+                        async for chunk in resp.aiter_bytes():
+                            if chunk:
+                                await response.write(chunk)
+            except Exception as e:
+                logger.error(f'❌ Google 流式代理出错: {e}')
+                error_data = {"error": str(e)}
+                error_msg = f'data: {json_lib.dumps(error_data, ensure_ascii=False)}\n\n'
+                await response.write(error_msg.encode('utf-8'))
+        
+        return ResponseStream(
+            streaming_fn,
+            content_type='text/event-stream',
+            headers={
+                'Cache-Control': 'no-cache',
+                'Connection': 'keep-alive',
+            }
+        )
+    else:
+        async with httpx.AsyncClient(timeout=CHAT_TIMEOUT) as client:
+            response = await client.post(generate_url, json=body)
+            
+            if response.status_code != 200:
+                return json({
+                    'code': response.status_code,
+                    'message': f'Google API 返回错误: {response.text[:500]}'
+                })
+            
+            return json({
+                'code': 200,
+                'data': response.json()
+            })
 

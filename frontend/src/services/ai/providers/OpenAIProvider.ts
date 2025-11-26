@@ -6,74 +6,70 @@ import { ResponseCleaner } from '../utils/ResponseCleaner'
 /**
  * OpenAI API 提供商实现
  * 支持 GPT 系列模型和多模态内容
+ * 
+ * 默认通过后端代理调用，避免 CORS 跨域问题
  */
 export class OpenAIProvider extends BaseProvider {
   /**
-   * 调用 OpenAI API
+   * 调用 OpenAI API（通过后端代理，解决 CORS 问题）
    * @param messages 聊天消息列表
    * @param stream 是否使用流式响应
    * @returns Promise<AIResponse | ReadableStream<Uint8Array>>
    */
   async callAPI(messages: ChatMessage[], stream: boolean): Promise<AIResponse | ReadableStream<Uint8Array>> {
-    // 构建OpenAI API URL
-    // 规则：
-    // - 如果 URL 已包含 /chat/completions，直接使用
-    // - 如果 URL 以 / 结尾（如 https://b.xyz/），拼接 chat/completions
-    // - 如果 URL 不以 / 结尾（如 https://a.com），拼接 /v1/chat/completions
     if (!this.config.baseUrl) {
       throw new Error('API URL 未配置')
     }
-    let apiUrl = this.config.baseUrl.trim()
     
-    if (apiUrl.includes('/chat/completions')) {
-      // 已包含 /chat/completions，直接使用
-    } else if (apiUrl.endsWith('/')) {
-      // 末尾有 /，用户已指定路径前缀，只拼接 chat/completions
-      apiUrl = `${apiUrl}chat/completions`
-    } else {
-      // 末尾无 /，拼接完整的 /v1/chat/completions
-      apiUrl = `${apiUrl}/v1/chat/completions`
-    }
-    
-    // 使用传入的模型ID
     const modelId = this.modelId
+    
+    // 构建消息列表
+    const formattedMessages = messages.map(msg => {
+      if (this.hasMultimodalContent(msg)) {
+        const multimodalContent = this.convertToMultimodalContent(msg)
+        return {
+          role: msg.role,
+          content: multimodalContent
+        }
+      } else {
+        return {
+          role: msg.role,
+          content: typeof msg.content === 'string' ? msg.content : msg.content[0]?.text || ''
+        }
+      }
+    })
+    
+    // 通过后端代理调用（解决 CORS 问题）
+    const proxyUrl = '/api/ai/chat'
     
     // 对于思考模型（如gpt-5-high）使用更长的超时时间
     const isThinkingModel = modelId.includes('gpt-5') || modelId.includes('o1') || modelId.includes('thinking')
     const timeoutMs = isThinkingModel ? 600000 : 300000 // 思考模型10分钟，普通模型5分钟
     
-    const response = await this.fetchWithTimeout(apiUrl, {
+    // 获取认证 Token
+    const token = localStorage.getItem('yprompt_token')
+    
+    const response = await this.fetchWithTimeout(proxyUrl, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'Authorization': `Bearer ${this.config.apiKey}`
+        ...(token && { 'Authorization': `Bearer ${token}` })
       },
       body: JSON.stringify({
+        base_url: this.config.baseUrl.trim(),
+        api_key: this.config.apiKey,
         model: modelId,
-        messages: messages.map(msg => {
-          // 检查是否有多模态内容
-          if (this.hasMultimodalContent(msg)) {
-            const multimodalContent = this.convertToMultimodalContent(msg)
-            return {
-              role: msg.role,
-              content: multimodalContent
-            }
-          } else {
-            return {
-              role: msg.role,
-              content: typeof msg.content === 'string' ? msg.content : msg.content[0]?.text || ''
-            }
-          }
-        }),
+        messages: formattedMessages,
+        stream: stream,
+        provider_type: 'openai',
         temperature: 0.7,
-        max_tokens: 60000,
-        ...(stream && { stream: true })
+        max_tokens: 60000
       })
     }, timeoutMs)
 
     if (!response.ok) {
       const errorData = await response.json().catch(() => ({}))
-      const error = new Error(`OpenAI API error: ${response.status} ${response.statusText}`)
+      const error = new Error(`API error: ${response.status} ${errorData.message || response.statusText}`)
       ;(error as any).error = errorData
       ;(error as any).status = response.status
       throw error
@@ -84,15 +80,18 @@ export class OpenAIProvider extends BaseProvider {
     } else {
       const data = await response.json()
       
+      // 处理后端代理的响应格式
+      const responseData = data.data || data
+      
       // 支持多种API响应格式的内容提取
       let result: string | undefined
       
-      if (data.choices && data.choices[0]?.message?.content) {
+      if (responseData.choices && responseData.choices[0]?.message?.content) {
         // OpenAI 格式: {choices: [{message: {content: "text"}}]}
-        result = data.choices[0].message.content
-      } else if (data.candidates && data.candidates[0]?.content?.parts) {
+        result = responseData.choices[0].message.content
+      } else if (responseData.candidates && responseData.candidates[0]?.content?.parts) {
         // Gemini 格式: {candidates: [{content: {parts: [{text: "text"}]}}]}
-        const parts = data.candidates[0].content.parts
+        const parts = responseData.candidates[0].content.parts
         // 查找包含text的部分（过滤掉thought等）
         for (const part of parts) {
           if (part.text && !part.thought) {
@@ -100,12 +99,12 @@ export class OpenAIProvider extends BaseProvider {
             break
           }
         }
-      } else if (data.content && typeof data.content === 'string') {
+      } else if (responseData.content && typeof responseData.content === 'string') {
         // 直接返回内容格式
-        result = data.content
-      } else if (data.text && typeof data.text === 'string') {
+        result = responseData.content
+      } else if (responseData.text && typeof responseData.text === 'string') {
         // 简单文本格式
-        result = data.text
+        result = responseData.text
       }
       
       if (!result || result.trim() === '') {
@@ -118,7 +117,7 @@ export class OpenAIProvider extends BaseProvider {
       
       return {
         content: result,
-        finishReason: data.choices?.[0]?.finish_reason
+        finishReason: responseData.choices?.[0]?.finish_reason
       }
     }
   }

@@ -6,22 +6,27 @@ import { ResponseCleaner } from '../utils/ResponseCleaner'
 /**
  * Google Gemini API 提供商实现
  * 支持 Gemini 系列模型和多模态内容
+ * 
+ * 默认通过后端代理调用，避免 CORS 跨域问题
  */
 export class GoogleProvider extends BaseProvider {
   /**
-   * 调用 Google Gemini API
+   * 调用 Google Gemini API（通过后端代理，解决 CORS 问题）
    * @param messages 聊天消息列表
    * @param stream 是否使用流式响应
    * @returns Promise<AIResponse | ReadableStream<Uint8Array>>
    */
   async callAPI(messages: ChatMessage[], stream: boolean): Promise<AIResponse | ReadableStream<Uint8Array>> {
+    if (!this.config.baseUrl) {
+      throw new Error('API URL 未配置')
+    }
     
     // Google Gemini API格式转换
     const systemMessage = this.extractSystemMessageText(messages)
-    
     const conversationMessages = messages.filter(m => m.role !== 'system')
+    const modelId = this.modelId
 
-    const contents = conversationMessages.map(msg => {
+    const formattedMessages = conversationMessages.map(msg => {
       const role = msg.role === 'assistant' ? 'model' : 'user'
       
       if (this.hasMultimodalContent(msg)) {
@@ -32,74 +37,38 @@ export class GoogleProvider extends BaseProvider {
         return { role, parts: [{ text }] }
       }
     })
-
-    const requestBody: any = {
-      contents,
-      generationConfig: {
-        temperature: 0.7
-      }
-    }
-
-    // 使用正确的system_instruction字段（顶级）
-    if (systemMessage) {
-      requestBody.system_instruction = {
-        parts: [
-          {
-            text: systemMessage
-          }
-        ]
-      }
-    } else {
-    }
     
-
-
-    // 构建Google Gemini API URL
-    if (!this.config.baseUrl) {
-      throw new Error('API URL 未配置')
-    }
-    let apiUrl = this.config.baseUrl.trim()
-    // 确保以/v1beta结尾，然后拼接模型路径
-    if (!apiUrl.endsWith('/v1beta')) {
-      // 如果是完整的generateContent URL，提取baseURL部分
-      if (apiUrl.includes('/models/')) {
-        apiUrl = apiUrl.split('/models/')[0]
-      }
-      // 确保以/v1beta结尾
-      if (!apiUrl.endsWith('/v1beta')) {
-        apiUrl = apiUrl.replace(/\/+$/, '') + '/v1beta'
-      }
-    }
-    
-    // 使用传入的模型ID
-    const modelId = this.modelId
-    
-    // 拼接模型特定路径
-    if (stream) {
-      apiUrl = `${apiUrl}/models/${modelId}:streamGenerateContent`
-      // 添加SSE参数（根据官方文档）
-      const url = new URL(apiUrl)
-      url.searchParams.set('alt', 'sse')
-      apiUrl = url.toString()
-    } else {
-      apiUrl = `${apiUrl}/models/${modelId}:generateContent`
-    }
+    // 通过后端代理调用（解决 CORS 问题）
+    const proxyUrl = '/api/ai/chat'
     
     // 对于Google模型使用较长的超时时间
     const timeoutMs = 300000 // 5分钟
     
-    const response = await this.fetchWithTimeout(apiUrl, {
+    // 获取认证 Token
+    const token = localStorage.getItem('yprompt_token')
+    
+    const response = await this.fetchWithTimeout(proxyUrl, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'x-goog-api-key': this.config.apiKey  // 使用官方文档推荐的header
+        ...(token && { 'Authorization': `Bearer ${token}` })
       },
-      body: JSON.stringify(requestBody)
+      body: JSON.stringify({
+        base_url: this.config.baseUrl.trim(),
+        api_key: this.config.apiKey,
+        model: modelId,
+        messages: formattedMessages,
+        stream: stream,
+        provider_type: 'google',
+        system_message: systemMessage,
+        temperature: 0.7,
+        max_tokens: 60000
+      })
     }, timeoutMs)
 
     if (!response.ok) {
       const errorData = await response.json().catch(() => ({}))
-      const error = new Error(`Google Gemini API error: ${response.status} ${response.statusText}`)
+      const error = new Error(`API error: ${response.status} ${errorData.message || response.statusText}`)
       ;(error as any).error = errorData
       ;(error as any).status = response.status
       throw error
@@ -110,8 +79,11 @@ export class GoogleProvider extends BaseProvider {
     } else {
       const data = await response.json()
       
+      // 处理后端代理的响应格式
+      const responseData = data.data || data
+      
       // 在parts数组中找到非思考内容的文本
-      const candidate = data.candidates?.[0]
+      const candidate = responseData.candidates?.[0]
       if (!candidate?.content?.parts) {
         throw new Error('API返回数据结构异常')
       }
