@@ -15,17 +15,17 @@
 
       <!-- 登录表单 -->
       <div v-else class="login-content">
-        <!-- Linux.do OAuth 登录 -->
+        <!-- Linux.do OAuth 登录 
         <div v-if="authConfig.linux_do_enabled" class="login-section">
           <button @click="loginWithLinuxDo" class="btn btn-primary btn-linux-do">
             使用 Linux.do 登录
           </button>
-        </div>
+        </div> -->
 
-        <!-- 分隔线（当两种认证方式都存在时显示） -->
+        <!-- 分隔线（当两种认证方式都存在时显示） 
         <div v-if="authConfig.linux_do_enabled && authConfig.local_auth_enabled" class="divider">
           <span>或</span>
-        </div>
+        </div> -->
 
         <!-- 本地账号密码登录 -->
         <div v-if="authConfig.local_auth_enabled" class="login-section">
@@ -190,6 +190,7 @@ const fetchAuthConfig = async () => {
 }
 
 // Linux.do OAuth 登录
+// @ts-ignore
 const loginWithLinuxDo = () => {
   if (!authConfig.value.linux_do_enabled) {
     errorMessage.value = 'Linux.do OAuth 未配置'
