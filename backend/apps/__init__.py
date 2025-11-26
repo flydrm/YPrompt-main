@@ -90,9 +90,16 @@ def configure_static_files(sanic_app):
             logger.debug(f"favicon 可能已注册: {e}")
     
     # SPA 路由处理：所有非 API 请求返回 index.html
-    @sanic_app.route('/', methods=['GET'])
-    @sanic_app.route('/<path:path>', methods=['GET'])
-    async def serve_spa(request, path=''):
+    # 注意：Sanic v23.3+ 不允许重复路由名称，需要分开定义
+    
+    @sanic_app.route('/', methods=['GET'], name='spa_index')
+    async def serve_spa_index(request):
+        """处理根路径请求"""
+        return await file_response(index_file)
+    
+    @sanic_app.route('/<path:path>', methods=['GET'], name='spa_catch_all')
+    async def serve_spa_path(request, path):
+        """处理其他所有路径请求（SPA 路由）"""
         # 跳过 API 请求
         if path.startswith('api/') or path.startswith('docs') or path.startswith('openapi'):
             return
