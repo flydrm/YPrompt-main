@@ -6,7 +6,7 @@ set -e
 # ==========================================
 
 # 环境变量默认值
-export YPROMPT_PORT=${YPROMPT_PORT:-8888}
+export YPROMPT_PORT=${YPROMPT_PORT:-8080}
 export YPROMPT_HOST=${YPROMPT_HOST:-0.0.0.0}
 export DATA_PATH=${DATA_PATH:-/app/data}
 export STATIC_PATH=${STATIC_PATH:-/app/frontend/dist}

@@ -5,7 +5,7 @@ YPrompt 后端服务启动入口
 
 支持通过环境变量配置：
 - YPROMPT_HOST: 监听地址（默认 0.0.0.0）
-- YPROMPT_PORT: 监听端口（默认 8888）
+- YPROMPT_PORT: 监听端口（默认 8080）
 - YPROMPT_WORKERS: worker 数量（默认 1）
 - YPROMPT_DEBUG: 调试模式（默认 false）
 - YPROMPT_AUTO_RELOAD: 自动重载（默认 false）
@@ -26,7 +26,7 @@ def main():
     
     # 从环境变量读取配置
     host = os.environ.get('YPROMPT_HOST', '0.0.0.0')
-    port = int(os.environ.get('YPROMPT_PORT', 8888))
+    port = int(os.environ.get('YPROMPT_PORT', 8080))
     workers = int(os.environ.get('YPROMPT_WORKERS', 1))
     debug = os.environ.get('YPROMPT_DEBUG', 'false').lower() == 'true'
     auto_reload = os.environ.get('YPROMPT_AUTO_RELOAD', 'false').lower() == 'true'

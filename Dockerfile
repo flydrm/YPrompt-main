@@ -33,7 +33,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     TZ=Asia/Shanghai \
     # 应用配置
-    YPROMPT_PORT=8888 \
+    YPROMPT_PORT=8080 \
     YPROMPT_HOST=0.0.0.0 \
     # 数据库配置
     DB_TYPE=sqlite \
@@ -77,7 +77,7 @@ RUN chmod +x /app/start.sh
 RUN mkdir -p /app/data
 
 # 暴露端口（只需要后端端口，Traefik 会处理）
-EXPOSE 8888
+EXPOSE 8080
 
 # 数据卷
 VOLUME ["/app/data"]

@@ -12,7 +12,7 @@ version: '3.8'
 # 启动命令：
 # docker-compose -f docker-compose.standalone.yml up -d
 #
-# 访问地址：http://localhost:8888
+# 访问地址：http://localhost:8080
 # ==========================================
 
 services:
@@ -23,14 +23,14 @@ services:
     
     # 直接暴露端口
     ports:
-      - "${YPROMPT_PORT:-8888}:8888"
+      - "${YPROMPT_PORT:-8080}:8080"
     
     volumes:
       - ./data:/app/data
     
     environment:
       # 后端配置
-      - YPROMPT_PORT=8888
+      - YPROMPT_PORT=8080
       - YPROMPT_HOST=0.0.0.0
       - YPROMPT_WORKERS=1
       
