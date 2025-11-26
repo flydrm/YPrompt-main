@@ -15,20 +15,24 @@ export class OpenAIProvider extends BaseProvider {
    * @returns Promise<AIResponse | ReadableStream<Uint8Array>>
    */
   async callAPI(messages: ChatMessage[], stream: boolean): Promise<AIResponse | ReadableStream<Uint8Array>> {
-    // 构建OpenAI API URL - 智能处理基础URL和完整URL
+    // 构建OpenAI API URL
+    // 规则：
+    // - 如果 URL 已包含 /chat/completions，直接使用
+    // - 如果 URL 以 / 结尾（如 https://b.xyz/），拼接 chat/completions
+    // - 如果 URL 不以 / 结尾（如 https://a.com），拼接 /v1/chat/completions
     if (!this.config.baseUrl) {
       throw new Error('API URL 未配置')
     }
     let apiUrl = this.config.baseUrl.trim()
     
     if (apiUrl.includes('/chat/completions')) {
-      // 已经是完整URL，直接使用
-    } else if (apiUrl.includes('/v1')) {
-      // 包含v1但没有chat/completions，拼接chat/completions
-      apiUrl = apiUrl.replace(/\/+$/, '') + '/chat/completions'
+      // 已包含 /chat/completions，直接使用
+    } else if (apiUrl.endsWith('/')) {
+      // 末尾有 /，用户已指定路径前缀，只拼接 chat/completions
+      apiUrl = `${apiUrl}chat/completions`
     } else {
-      // 基础URL，需要拼接完整路径
-      apiUrl = apiUrl.replace(/\/+$/, '') + '/v1/chat/completions'
+      // 末尾无 /，拼接完整的 /v1/chat/completions
+      apiUrl = `${apiUrl}/v1/chat/completions`
     }
     
     // 使用传入的模型ID

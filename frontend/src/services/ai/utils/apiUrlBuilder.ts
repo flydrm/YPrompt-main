@@ -4,20 +4,29 @@
 
 /**
  * 构建OpenAI聊天API URL
+ * 
+ * 规则：
+ * - 如果 URL 已包含 /chat/completions，直接使用
+ * - 如果 URL 以 / 结尾（如 https://b.xyz/），拼接 chat/completions
+ * - 如果 URL 不以 / 结尾（如 https://a.com），拼接 /v1/chat/completions
  */
 export function buildOpenAIChatUrl(baseUrl: string): string {
   if (!baseUrl) {
     throw new Error('API URL 未配置')
   }
 
-  let apiUrl = baseUrl.trim()
+  const apiUrl = baseUrl.trim()
 
+  // 已包含 /chat/completions，直接使用
   if (apiUrl.includes('/chat/completions')) {
     return apiUrl
-  } else if (apiUrl.includes('/v1')) {
-    return apiUrl.replace(/\/+$/, '') + '/chat/completions'
+  }
+
+  // 根据末尾是否有 / 判断是否需要拼接 /v1
+  if (apiUrl.endsWith('/')) {
+    return `${apiUrl}chat/completions`
   } else {
-    return apiUrl.replace(/\/+$/, '') + '/v1/chat/completions'
+    return `${apiUrl}/v1/chat/completions`
   }
 }
 
