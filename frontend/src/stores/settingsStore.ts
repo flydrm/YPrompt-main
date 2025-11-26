@@ -63,6 +63,8 @@ export const useSettingsStore = defineStore('settings', () => {
   const streamMode = ref(true) // 默认开启流式模式
   const deletedBuiltinProviders = ref<string[]>([]) // 记录被删除的内置提供商ID
   const useSlimRules = ref(false) // 是否使用精简版提示词规则，默认为false（使用完整版）
+  const isAdmin = ref(false) // 当前用户是否为管理员
+  const cloudSettingsLoaded = ref(false) // 是否已从云端加载设置
 
   // 提示词编辑相关状态
   const showPromptEditor = ref(false)
@@ -215,22 +217,124 @@ export const useSettingsStore = defineStore('settings', () => {
     }
   }
 
-  // 保存设置到本地存储
-  const saveSettings = () => {
-    // 只保存用户自定义的提供商，不保存内置提供商
-    const userProviders = providers.value.filter(provider => !provider.id.startsWith('builtin_'))
-    localStorage.setItem('yprompt_providers', JSON.stringify(userProviders))
+  // 保存设置到本地存储（同时同步到云端，仅管理员）
+  const saveSettings = async () => {
+    // 保存到本地存储（作为缓存）
+    localStorage.setItem('yprompt_providers', JSON.stringify(providers.value))
     localStorage.setItem('yprompt_selected_provider', selectedProvider.value)
     localStorage.setItem('yprompt_selected_model', selectedModel.value)
     localStorage.setItem('yprompt_stream_mode', JSON.stringify(streamMode.value))
-    // 保存被删除的内置提供商列表
     localStorage.setItem('yprompt_deleted_builtin_providers', JSON.stringify(deletedBuiltinProviders.value))
-    // 保存精简版规则开关
     localStorage.setItem('yprompt_use_slim_rules', JSON.stringify(useSlimRules.value))
+    
+    // 如果是管理员，同步到云端
+    if (isAdmin.value) {
+      await saveSettingsToCloud()
+    }
+  }
+  
+  // 保存设置到云端（仅管理员）
+  const saveSettingsToCloud = async () => {
+    const token = localStorage.getItem('yprompt_token')
+    if (!token || !isAdmin.value) return
+    
+    try {
+      const response = await fetch(`${import.meta.env.VITE_API_BASE_URL || ''}/api/settings/ai`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`,
+        },
+        body: JSON.stringify({
+          providers: providers.value,
+          default_provider: selectedProvider.value,
+          default_model: selectedModel.value,
+          stream_mode: streamMode.value,
+          use_slim_rules: useSlimRules.value,
+        }),
+      })
+      
+      const result = await response.json()
+      if (result.code === 200) {
+        console.log('✅ AI设置已同步到云端')
+      } else {
+        console.error('❌ 同步AI设置失败:', result.message)
+      }
+    } catch (error) {
+      console.error('❌ 同步AI设置失败:', error)
+    }
+  }
+  
+  // 从云端加载设置
+  const loadSettingsFromCloud = async (): Promise<boolean> => {
+    const token = localStorage.getItem('yprompt_token')
+    if (!token) return false
+    
+    try {
+      const response = await fetch(`${import.meta.env.VITE_API_BASE_URL || ''}/api/settings/ai`, {
+        method: 'GET',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+        },
+      })
+      
+      const result = await response.json()
+      if (result.code === 200 && result.data) {
+        const cloudData = result.data
+        
+        // 更新管理员状态
+        isAdmin.value = cloudData.is_admin || false
+        
+        // 如果云端有配置，使用云端配置
+        if (cloudData.providers && cloudData.providers.length > 0) {
+          providers.value = cloudData.providers
+          selectedProvider.value = cloudData.default_provider || ''
+          selectedModel.value = cloudData.default_model || ''
+          streamMode.value = cloudData.stream_mode !== false
+          useSlimRules.value = cloudData.use_slim_rules || false
+          
+          // 同步到本地存储
+          localStorage.setItem('yprompt_providers', JSON.stringify(providers.value))
+          localStorage.setItem('yprompt_selected_provider', selectedProvider.value)
+          localStorage.setItem('yprompt_selected_model', selectedModel.value)
+          localStorage.setItem('yprompt_stream_mode', JSON.stringify(streamMode.value))
+          localStorage.setItem('yprompt_use_slim_rules', JSON.stringify(useSlimRules.value))
+          
+          cloudSettingsLoaded.value = true
+          console.log('✅ 从云端加载AI设置成功')
+          return true
+        }
+      }
+      return false
+    } catch (error) {
+      console.error('从云端加载AI设置失败:', error)
+      return false
+    }
   }
 
-  // 从本地存储加载设置
+  // 从本地存储加载设置（优先从云端加载）
   const loadSettings = async () => {
+    // 1. 首先尝试从云端加载设置（管理员配置的全局设置）
+    const cloudLoaded = await loadSettingsFromCloud()
+    
+    if (cloudLoaded) {
+      // 云端有配置，自动选择提供商和模型
+      autoSelectProviderAndModel()
+    } else {
+      // 2. 云端没有配置，从本地存储加载
+      loadSettingsFromLocal()
+    }
+
+    // 3. 从云端加载提示词规则（每次打开浏览器都调用，确保最新）
+    try {
+      await promptConfigManager.loadFromCloud()
+    } catch (error) {
+      console.error('从云端加载提示词规则失败:', error)
+    }
+  }
+  
+  // 从本地存储加载设置
+  const loadSettingsFromLocal = () => {
     const savedProviders = localStorage.getItem('yprompt_providers')
     const savedProvider = localStorage.getItem('yprompt_selected_provider')
     const savedModel = localStorage.getItem('yprompt_selected_model')
@@ -256,23 +360,18 @@ export const useSettingsStore = defineStore('settings', () => {
         .map(convertBuiltinToProviderConfig)
         .filter(provider => !deletedBuiltinProviders.value.includes(provider.id))
       allProviders = [...builtinProviderConfigs]
-      
-      if (deletedBuiltinProviders.value.length > 0) {
-      }
     }
 
-    // 合并用户自定义的提供商配置
+    // 合并本地缓存的提供商配置
     if (savedProviders) {
       try {
-        const userProviders = JSON.parse(savedProviders)
-        if (Array.isArray(userProviders)) {
-          // 过滤掉与内置提供商ID冲突的用户配置
-          const nonBuiltinProviders = userProviders.filter((provider: ProviderConfig) => 
-            !provider.id.startsWith('builtin_')
-          )
-          allProviders = [...allProviders, ...nonBuiltinProviders]
+        const localProviders = JSON.parse(savedProviders)
+        if (Array.isArray(localProviders) && localProviders.length > 0) {
+          // 如果本地有完整配置，直接使用
+          allProviders = localProviders
         }
       } catch (error) {
+        // 解析失败，使用内置配置
       }
     }
 
@@ -282,37 +381,47 @@ export const useSettingsStore = defineStore('settings', () => {
       try {
         streamMode.value = JSON.parse(savedStreamMode)
       } catch (error) {
-        streamMode.value = true // 默认开启流式模式
+        streamMode.value = true
       }
     }
 
-    // 加载精简版规则开关
     if (savedUseSlimRules) {
       try {
         useSlimRules.value = JSON.parse(savedUseSlimRules)
       } catch (error) {
-        useSlimRules.value = false // 默认使用完整版
+        useSlimRules.value = false
       }
     }
 
-    // 验证并恢复保存的提供商和模型选择
+    // 恢复选择的提供商和模型
+    if (savedProvider) {
+      selectedProvider.value = savedProvider
+    }
+    if (savedModel) {
+      selectedModel.value = savedModel
+    }
+    
+    // 自动选择
+    autoSelectProviderAndModel()
+  }
+  
+  // 自动选择提供商和模型
+  const autoSelectProviderAndModel = () => {
     const availableProviders = getAvailableProviders()
+    
+    // 验证当前选择是否有效
     let validProviderSelected = false
     let validModelSelected = false
-
-    if (savedProvider) {
-      // 检查保存的提供商是否仍然存在且可用
-      const savedProviderExists = availableProviders.find(p => p.id === savedProvider)
-      if (savedProviderExists) {
-        selectedProvider.value = savedProvider
+    
+    if (selectedProvider.value) {
+      const providerExists = availableProviders.find(p => p.id === selectedProvider.value)
+      if (providerExists) {
         validProviderSelected = true
         
-        // 检查保存的模型是否仍然存在且可用
-        if (savedModel) {
-          const availableModels = getAvailableModels(savedProvider)
-          const savedModelExists = availableModels.find(m => m.id === savedModel)
-          if (savedModelExists) {
-            selectedModel.value = savedModel
+        if (selectedModel.value) {
+          const availableModels = getAvailableModels(selectedProvider.value)
+          const modelExists = availableModels.find(m => m.id === selectedModel.value)
+          if (modelExists) {
             validModelSelected = true
           }
         }
@@ -321,25 +430,16 @@ export const useSettingsStore = defineStore('settings', () => {
 
     // 自动选择逻辑
     if (!validProviderSelected && availableProviders.length > 0) {
-      // 自动选择第一个可用的提供商
       selectedProvider.value = availableProviders[0].id
     }
 
     if (selectedProvider.value && !validModelSelected) {
-      // 为当前提供商自动选择第一个可用模型
       const availableModels = getAvailableModels(selectedProvider.value)
       if (availableModels.length > 0) {
         selectedModel.value = availableModels[0].id
       } else {
-        selectedModel.value = '' // 清空无效的模型选择
+        selectedModel.value = ''
       }
-    }
-
-    // 从云端加载提示词规则（每次打开浏览器都调用，确保最新）
-    try {
-      await promptConfigManager.loadFromCloud()
-    } catch (error) {
-      console.error('从云端加载提示词规则失败:', error)
     }
   }
 
@@ -748,6 +848,8 @@ export const useSettingsStore = defineStore('settings', () => {
     streamMode,
     deletedBuiltinProviders,
     useSlimRules,
+    isAdmin,
+    cloudSettingsLoaded,
     // 提示词编辑状态
     showPromptEditor,
     editingPromptType,
@@ -771,6 +873,8 @@ export const useSettingsStore = defineStore('settings', () => {
     deleteModel,
     saveSettings,
     loadSettings,
+    loadSettingsFromCloud,
+    saveSettingsToCloud,
     restoreDeletedBuiltinProviders,
     // 提示词编辑方法
     loadPromptRules,

@@ -89,27 +89,36 @@ def configure_static_files(sanic_app):
         except Exception as e:
             logger.debug(f"favicon 可能已注册: {e}")
     
-    # SPA 路由处理：所有非 API 请求返回 index.html
-    # 注意：Sanic v23.3+ 不允许重复路由名称，需要分开定义
+    # SPA 路由处理：只处理根路径和前端路由
+    # 注意：不能使用 catch-all 路由，否则会拦截 API 请求
     
     @sanic_app.route('/', methods=['GET'], name='spa_index')
     async def serve_spa_index(request):
         """处理根路径请求"""
         return await file_response(index_file)
     
-    @sanic_app.route('/<path:path>', methods=['GET'], name='spa_catch_all')
-    async def serve_spa_path(request, path):
-        """处理其他所有路径请求（SPA 路由）"""
-        # 跳过 API 请求
-        if path.startswith('api/') or path.startswith('docs') or path.startswith('openapi'):
-            return
+    # 使用 404 错误处理器来处理前端 SPA 路由
+    from sanic.exceptions import NotFound
+    
+    @sanic_app.exception(NotFound)
+    async def handle_not_found(request, exception):
+        """处理 404 错误，返回 index.html 供前端路由处理"""
+        path = request.path
+        
+        # API 请求返回 JSON 错误
+        if path.startswith('/api/') or path.startswith('/docs') or path.startswith('/openapi'):
+            from sanic.response import json
+            return json({
+                'code': 404,
+                'message': f'接口不存在: {path}'
+            }, status=404)
         
         # 检查是否是静态资源请求
-        full_path = os.path.join(static_path, path)
+        full_path = os.path.join(static_path, path.lstrip('/'))
         if os.path.isfile(full_path):
             return await file_response(full_path)
         
-        # 其他所有请求返回 index.html（SPA 路由）
+        # 前端路由返回 index.html
         return await file_response(index_file)
 
 

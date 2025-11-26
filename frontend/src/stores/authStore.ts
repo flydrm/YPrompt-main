@@ -290,12 +290,24 @@ export const useAuthStore = defineStore('auth', () => {
       localStorage.removeItem(key)
     })
     
-    // 也可以清除所有以 yprompt_ 或 user_prompt_ 开头的 key
+    // 清除以 yprompt_ 或 user_prompt_ 开头的 key，但保留 AI 设置
+    const keysToPreserve = [
+      'yprompt_token',
+      'yprompt_user',
+      // 保留 AI 服务提供商设置（这些是用户配置的，不应随登出清除）
+      'yprompt_providers',
+      'yprompt_selected_provider',
+      'yprompt_selected_model',
+      'yprompt_stream_mode',
+      'yprompt_deleted_builtin_providers',
+      'yprompt_use_slim_rules',
+    ]
+    
     const allKeys = Object.keys(localStorage)
     allKeys.forEach(key => {
       if (key.startsWith('yprompt_') || key.startsWith('user_prompt_')) {
-        // 排除 token 和 user (已经在上面清除了)
-        if (key !== 'yprompt_token' && key !== 'yprompt_user') {
+        // 排除需要保留的 key
+        if (!keysToPreserve.includes(key)) {
           localStorage.removeItem(key)
         }
       }

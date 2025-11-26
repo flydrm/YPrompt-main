@@ -220,6 +220,40 @@ CREATE INDEX IF NOT EXISTS idx_sessions_user_id ON user_sessions(user_id);
 CREATE INDEX IF NOT EXISTS idx_sessions_token_hash ON user_sessions(token_hash);
 CREATE INDEX IF NOT EXISTS idx_sessions_expire_time ON user_sessions(expire_time);
 
+-- 全局AI设置表（管理员配置，所有用户共享）
+CREATE TABLE IF NOT EXISTS global_ai_settings (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  
+  -- AI提供商配置 (JSON格式，包含apiKey等敏感信息)
+  providers TEXT DEFAULT NULL,
+  
+  -- 默认选中的提供商和模型
+  default_provider VARCHAR(100) DEFAULT NULL,
+  default_model VARCHAR(100) DEFAULT NULL,
+  
+  -- 其他全局设置
+  stream_mode INTEGER DEFAULT 1,
+  use_slim_rules INTEGER DEFAULT 0,
+  
+  -- 管理员信息
+  updated_by INTEGER DEFAULT NULL,
+  
+  create_time DATETIME DEFAULT CURRENT_TIMESTAMP,
+  update_time DATETIME DEFAULT CURRENT_TIMESTAMP,
+  
+  FOREIGN KEY (updated_by) REFERENCES users(id) ON DELETE SET NULL
+);
+
+-- 确保只有一条全局配置记录
+CREATE UNIQUE INDEX IF NOT EXISTS uk_global_ai_settings ON global_ai_settings(id);
+
+CREATE TRIGGER IF NOT EXISTS update_global_ai_settings_timestamp 
+AFTER UPDATE ON global_ai_settings
+FOR EACH ROW
+BEGIN
+  UPDATE global_ai_settings SET update_time = CURRENT_TIMESTAMP WHERE id = OLD.id;
+END;
+
 -- 更新时间触发器 (SQLite不支持ON UPDATE CURRENT_TIMESTAMP)
 CREATE TRIGGER IF NOT EXISTS update_users_timestamp 
 AFTER UPDATE ON users

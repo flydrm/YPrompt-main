@@ -81,28 +81,16 @@ class PasswordUtil:
             tuple: (bool, str) - (是否通过, 错误信息)
             
         密码要求:
-            - 长度至少8个字符
-            - 包含大小写字母、数字
+            - 长度至少6个字符
         """
         if not password:
             return False, '密码不能为空'
         
-        if len(password) < 8:
-            return False, '密码长度至少8个字符'
+        if len(password) < 6:
+            return False, '密码长度至少6个字符'
         
         if len(password) > 128:
             return False, '密码长度不能超过128个字符'
-        
-        # 检查是否包含数字
-        has_digit = any(c.isdigit() for c in password)
-        # 检查是否包含字母
-        has_letter = any(c.isalpha() for c in password)
-        
-        if not has_digit:
-            return False, '密码必须包含数字'
-        
-        if not has_letter:
-            return False, '密码必须包含字母'
         
         return True, ''
     

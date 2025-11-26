@@ -43,7 +43,6 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     ADMIN_PASSWORD=admin123 \
     # 数据目录
     DATA_PATH=/app/data \
-    LOG_PATH=/app/data/logs \
     # 前端静态文件目录
     STATIC_PATH=/app/frontend/dist
 
@@ -75,7 +74,7 @@ COPY start.sh /app/
 RUN chmod +x /app/start.sh
 
 # 创建必要的目录
-RUN mkdir -p /app/data/logs
+RUN mkdir -p /app/data
 
 # 暴露端口（只需要后端端口，Traefik 会处理）
 EXPOSE 8888
