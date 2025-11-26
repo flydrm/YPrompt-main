@@ -91,9 +91,7 @@ def _build_chat_url(base_url: str) -> str:
 }})
 @openapi.response(200, {"application/json": {
     "code": int,
-    "data": {
-        "models": openapi.Array(description="模型列表")
-    }
+    "data": dict
 }})
 async def get_models(request):
     """

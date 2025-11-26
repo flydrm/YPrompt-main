@@ -24,14 +24,7 @@ settings = Blueprint('settings', url_prefix='/api/settings')
 @openapi.secured("BearerAuth")
 @openapi.response(200, {"application/json": {
     "code": int,
-    "data": {
-        "providers": openapi.Array(description="AI提供商列表"),
-        "default_provider": openapi.String(description="默认提供商ID"),
-        "default_model": openapi.String(description="默认模型ID"),
-        "stream_mode": openapi.Boolean(description="是否启用流式模式"),
-        "use_slim_rules": openapi.Boolean(description="是否使用精简版规则"),
-        "is_admin": openapi.Boolean(description="当前用户是否为管理员"),
-    }
+    "data": dict
 }})
 async def get_ai_settings(request):
     """获取全局AI设置（所有用户可用）"""
@@ -67,13 +60,7 @@ async def get_ai_settings(request):
 @openapi.summary("保存全局AI设置")
 @openapi.description("保存AI提供商配置（仅管理员可用）")
 @openapi.secured("BearerAuth")
-@openapi.body({"application/json": {
-    "providers": openapi.Array(description="AI提供商列表"),
-    "default_provider": openapi.String(description="默认提供商ID"),
-    "default_model": openapi.String(description="默认模型ID"),
-    "stream_mode": openapi.Boolean(description="是否启用流式模式"),
-    "use_slim_rules": openapi.Boolean(description="是否使用精简版规则"),
-}})
+@openapi.body({"application/json": dict})
 @openapi.response(200, {"application/json": {"code": int, "message": str}})
 @openapi.response(403, {"application/json": {"code": int, "message": str}})
 async def save_ai_settings(request):
