@@ -1,0 +1,53 @@
+version: '3.8'
+
+services:
+  yprompt:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: yprompt:latest
+    container_name: yprompt
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./data:/app/data
+    environment:
+      # 后端配置
+      - YPROMPT_PORT=8888
+      - YPROMPT_HOST=127.0.0.1
+      - DOMAIN=localhost
+      
+      # 数据库配置
+      - DB_TYPE=sqlite
+      - SQLITE_DB_PATH=../data/yprompt.db
+      
+      # JWT配置
+      - SECRET_KEY=your-secret-key-change-in-production
+      
+      # Linux.do OAuth配置（可选）
+      - LINUX_DO_CLIENT_ID=
+      - LINUX_DO_CLIENT_SECRET=
+      - LINUX_DO_REDIRECT_URI=http://localhost/auth/callback
+      
+      # 默认管理员账号
+      - ADMIN_USERNAME=admin
+      - ADMIN_PASSWORD=admin123
+      
+      # 健康检查配置
+      - HEALTH_CHECK_INTERVAL=30
+      - HEALTH_CHECK_TIMEOUT=10
+      - HEALTH_CHECK_RETRIES=3
+    healthcheck:
+      test: ["/app/healthcheck.sh"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    networks:
+      - yprompt-network
+
+networks:
+  yprompt-network:
+    driver: bridge
