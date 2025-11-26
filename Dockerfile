@@ -1,113 +1,92 @@
-FROM nginx:alpine
+# ==========================================
+# YPrompt Docker 多阶段构建
+# 适配 Traefik 反向代理，不使用 Nginx
+# ==========================================
 
-# 安装必要的运行时依赖
-RUN apk add --no-cache ca-certificates tzdata curl bash python3 py3-pip
+# ==========================================
+# 阶段1: 构建前端
+# ==========================================
+FROM node:20-alpine AS frontend-builder
 
-# 设置时区
-ENV TZ=Asia/Shanghai
+WORKDIR /app/frontend
 
-# 设置默认环境变量
-ENV YPROMPT_PORT=8888
-ENV YPROMPT_HOST=127.0.0.1
+# 复制 package.json 和 lock 文件
+COPY frontend/package*.json ./
 
-# 默认管理员账号配置（可在docker run时通过-e覆盖）
-ENV ADMIN_USERNAME=admin
-ENV ADMIN_PASSWORD=admin123
+# 安装依赖（使用国内镜像加速）
+RUN npm config set registry https://registry.npmmirror.com && \
+    npm ci --only=production=false
 
-# 数据目录统一配置（所有持久化数据都在/app/data下）
-ENV CACHE_PATH=/app/data/cache
-ENV LOG_PATH=/app/data/logs
+# 复制前端源代码
+COPY frontend/ ./
 
-# 健康检查配置
-ENV HEALTH_CHECK_INTERVAL=30
-ENV HEALTH_CHECK_TIMEOUT=10
-ENV HEALTH_CHECK_RETRIES=3
+# 构建前端
+RUN npm run build
+
+# ==========================================
+# 阶段2: 运行时镜像
+# ==========================================
+FROM python:3.11-slim
+
+# 设置环境变量
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    TZ=Asia/Shanghai \
+    # 应用配置
+    YPROMPT_PORT=8888 \
+    YPROMPT_HOST=0.0.0.0 \
+    # 数据库配置
+    DB_TYPE=sqlite \
+    SQLITE_DB_PATH=/app/data/yprompt.db \
+    # 默认管理员账号
+    ADMIN_USERNAME=admin \
+    ADMIN_PASSWORD=admin123 \
+    # 数据目录
+    DATA_PATH=/app/data \
+    LOG_PATH=/app/data/logs \
+    # 前端静态文件目录
+    STATIC_PATH=/app/frontend/dist
+
+# 安装系统依赖
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    curl \
+    tzdata \
+    && rm -rf /var/lib/apt/lists/* \
+    && ln -snf /usr/share/zoneinfo/$TZ /etc/localtime \
+    && echo $TZ > /etc/timezone
 
 # 创建应用目录
 WORKDIR /app
 
-# 获取架构信息
-ARG TARGETARCH
+# 复制后端依赖文件
+COPY backend/requirements.txt /app/backend/
 
-# ==========================================
-# 后端部分
-# ==========================================
+# 安装 Python 依赖（使用国内镜像加速）
+RUN pip install --no-cache-dir -i https://pypi.tuna.tsinghua.edu.cn/simple \
+    -r /app/backend/requirements.txt
 
 # 复制后端代码
-COPY backend /app/backend/
+COPY backend/ /app/backend/
 
-# 安装Python依赖
-RUN cd /app/backend && \
-    pip3 install --no-cache-dir --break-system-packages -r requirements.txt && \
-    chmod +x run.py
-
-# ==========================================
-# 前端部分
-# ==========================================
-
-# 复制前端构建产物（从 build-context 目录）
-COPY frontend-dist /app/frontend/dist/
-
-# ==========================================
-# 启动脚本
-# ==========================================
+# 从前端构建阶段复制构建产物
+COPY --from=frontend-builder /app/frontend/dist /app/frontend/dist
 
 # 复制启动脚本
 COPY start.sh /app/
 RUN chmod +x /app/start.sh
 
-# 创建健康检查脚本（直接在镜像中创建，避免依赖外部文件）
-RUN cat > /app/healthcheck.sh << 'EOF'
-#!/bin/bash
-# 健康检查脚本 - 检查nginx和后端服务是否正常
+# 创建必要的目录
+RUN mkdir -p /app/data/logs
 
-# 环境变量默认值
-YPROMPT_HOST=${YPROMPT_HOST:-127.0.0.1}
-YPROMPT_PORT=${YPROMPT_PORT:-8888}
-HEALTH_CHECK_TIMEOUT=${HEALTH_CHECK_TIMEOUT:-10}
+# 健康检查
+HEALTHCHECK --interval=30s --timeout=10s --start-period=30s --retries=3 \
+    CMD curl -sf http://localhost:${YPROMPT_PORT}/api/auth/config || exit 1
 
-# 检查nginx是否运行
-if ! pgrep nginx >/dev/null 2>&1; then
-    echo "❌ Nginx进程不存在"
-    exit 1
-fi
+# 暴露端口（只需要后端端口，Traefik 会处理）
+EXPOSE 8888
 
-# 检查nginx是否响应（通过80端口）
-if ! curl -sf --max-time ${HEALTH_CHECK_TIMEOUT} http://localhost/api/auth/config >/dev/null 2>&1; then
-    echo "❌ Nginx无法访问API端点"
-    exit 1
-fi
-
-# 检查后端服务是否响应
-if ! curl -sf --max-time ${HEALTH_CHECK_TIMEOUT} http://${YPROMPT_HOST}:${YPROMPT_PORT}/api/auth/config >/dev/null 2>&1; then
-    echo "❌ 后端服务健康检查失败"
-    exit 1
-fi
-
-# 所有检查通过
-exit 0
-EOF
-
-RUN chmod +x /app/healthcheck.sh
-
-# 创建必要的目录结构（统一在/app/data下）
-RUN mkdir -p /app/data/cache \
-             /app/data/logs/backend \
-             /app/data/logs/nginx \
-             /app/data/ssl
-
-# 创建nginx配置目录
-RUN mkdir -p /etc/nginx/conf.d
-
-# 健康检查（检查nginx和后端）
-HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
-  CMD /app/healthcheck.sh || exit 1
-
-# 暴露端口
-EXPOSE 80 443
-
-# 设置卷挂载点（只挂载/app/data，所有数据都在这里）
+# 数据卷
 VOLUME ["/app/data"]
 
-# 设置启动命令
+# 启动命令
 CMD ["/app/start.sh"]

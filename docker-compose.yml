@@ -1,53 +1,76 @@
 version: '3.8'
 
+# ==========================================
+# YPrompt Docker Compose 配置
+# 适配 Traefik 反向代理
+# ==========================================
+
 services:
   yprompt:
-    build:
-      context: .
-      dockerfile: Dockerfile
-    image: yprompt:latest
+    image: ${YPROMPT_IMAGE:-ghcr.io/fish2018/yprompt:latest}
     container_name: yprompt
     restart: unless-stopped
-    ports:
-      - "80:80"
-      - "443:443"
+    
+    # 不直接暴露端口，通过 Traefik 访问
+    # ports:
+    #   - "8888:8888"
+    
     volumes:
       - ./data:/app/data
+    
     environment:
       # 后端配置
       - YPROMPT_PORT=8888
-      - YPROMPT_HOST=127.0.0.1
-      - DOMAIN=localhost
+      - YPROMPT_HOST=0.0.0.0
       
       # 数据库配置
       - DB_TYPE=sqlite
-      - SQLITE_DB_PATH=../data/yprompt.db
+      - SQLITE_DB_PATH=/app/data/yprompt.db
       
-      # JWT配置
-      - SECRET_KEY=your-secret-key-change-in-production
+      # JWT配置（生产环境请修改）
+      - SECRET_KEY=${SECRET_KEY:-change-me-in-production}
       
       # Linux.do OAuth配置（可选）
-      - LINUX_DO_CLIENT_ID=
-      - LINUX_DO_CLIENT_SECRET=
-      - LINUX_DO_REDIRECT_URI=http://localhost/auth/callback
+      - LINUX_DO_CLIENT_ID=${LINUX_DO_CLIENT_ID:-}
+      - LINUX_DO_CLIENT_SECRET=${LINUX_DO_CLIENT_SECRET:-}
+      - LINUX_DO_REDIRECT_URI=${LINUX_DO_REDIRECT_URI:-}
       
       # 默认管理员账号
-      - ADMIN_USERNAME=admin
-      - ADMIN_PASSWORD=admin123
+      - ADMIN_USERNAME=${ADMIN_USERNAME:-admin}
+      - ADMIN_PASSWORD=${ADMIN_PASSWORD:-admin123}
+    
+    labels:
+      # Traefik 配置
+      - "traefik.enable=true"
       
-      # 健康检查配置
-      - HEALTH_CHECK_INTERVAL=30
-      - HEALTH_CHECK_TIMEOUT=10
-      - HEALTH_CHECK_RETRIES=3
+      # HTTP 路由
+      - "traefik.http.routers.yprompt.rule=Host(`${DOMAIN:-yprompt.localhost}`)"
+      - "traefik.http.routers.yprompt.entrypoints=web"
+      
+      # HTTPS 路由（如果启用）
+      - "traefik.http.routers.yprompt-secure.rule=Host(`${DOMAIN:-yprompt.localhost}`)"
+      - "traefik.http.routers.yprompt-secure.entrypoints=websecure"
+      - "traefik.http.routers.yprompt-secure.tls=true"
+      - "traefik.http.routers.yprompt-secure.tls.certresolver=${CERT_RESOLVER:-letsencrypt}"
+      
+      # 服务配置
+      - "traefik.http.services.yprompt.loadbalancer.server.port=8888"
+      
+      # HTTP 重定向到 HTTPS（可选）
+      # - "traefik.http.routers.yprompt.middlewares=redirect-to-https"
+      # - "traefik.http.middlewares.redirect-to-https.redirectscheme.scheme=https"
+    
+    networks:
+      - traefik-network
+    
     healthcheck:
-      test: ["/app/healthcheck.sh"]
+      test: ["CMD", "curl", "-sf", "http://localhost:8888/api/auth/config"]
       interval: 30s
       timeout: 10s
       retries: 3
-      start_period: 40s
-    networks:
-      - yprompt-network
+      start_period: 30s
 
 networks:
-  yprompt-network:
-    driver: bridge
+  traefik-network:
+    external: true
+    name: ${TRAEFIK_NETWORK:-traefik-network}

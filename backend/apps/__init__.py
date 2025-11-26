@@ -3,11 +3,13 @@
 """
 初始化app及各种相关配置，扩展插件，中间件，蓝图等
 """
+import os
 import pkgutil
 import importlib
 import logging.config
 
 from sanic import Sanic, Blueprint
+from sanic.response import html, file as file_response
 from sanic_ext import Extend
 from sanic.log import logger
 
@@ -43,6 +45,47 @@ def configure_blueprints(sanic_app):
             logger.error(f"❌ 注册蓝图失败 [{modname}]: {e}")
 
 
+def configure_static_files(sanic_app):
+    """配置前端静态文件服务（用于 Docker 部署，Traefik 反代场景）"""
+    # 获取静态文件目录，默认为 /app/frontend/dist
+    static_path = os.environ.get('STATIC_PATH', '/app/frontend/dist')
+    
+    # 检查静态文件目录是否存在
+    if not os.path.exists(static_path):
+        logger.warning(f"⚠️  静态文件目录不存在: {static_path}，跳过静态文件配置")
+        return
+    
+    index_file = os.path.join(static_path, 'index.html')
+    if not os.path.exists(index_file):
+        logger.warning(f"⚠️  index.html 不存在: {index_file}，跳过静态文件配置")
+        return
+    
+    logger.info(f"✅ 配置静态文件服务: {static_path}")
+    
+    # 注册静态文件目录（用于 js/css/images 等资源）
+    sanic_app.static('/assets', os.path.join(static_path, 'assets'), name='assets')
+    
+    # 处理 favicon.ico
+    favicon_path = os.path.join(static_path, 'favicon.ico')
+    if os.path.exists(favicon_path):
+        sanic_app.static('/favicon.ico', favicon_path, name='favicon')
+    
+    # SPA 路由处理：所有非 API 请求返回 index.html
+    @sanic_app.route('/', methods=['GET'])
+    @sanic_app.route('/<path:path>', methods=['GET'])
+    async def serve_spa(request, path=''):
+        # 跳过 API 请求
+        if path.startswith('api/') or path.startswith('docs') or path.startswith('openapi'):
+            return
+        
+        # 检查是否是静态资源请求
+        full_path = os.path.join(static_path, path)
+        if os.path.isfile(full_path):
+            return await file_response(full_path)
+        
+        # 其他所有请求返回 index.html（SPA 路由）
+        return await file_response(index_file)
+
 
 def create_app(env=None,name=None):
     """
@@ -59,5 +102,7 @@ def create_app(env=None,name=None):
     configure_extensions(app)
     # 配置蓝图
     configure_blueprints(app)
+    # 配置静态文件服务（Docker 部署时使用）
+    configure_static_files(app)
     return app
 

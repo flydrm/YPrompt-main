@@ -36,44 +36,66 @@ AI通过对话挖掘用户需求，并自动生成专业的提示词，支持系
 YPrompt/
 ├── frontend/                  # Vue 3 + TypeScript 前端
 │   └── dist/                 # 构建产物
-├── backend/                   # Sanic Python 后端
+├── backend/                   # Sanic Python 后端（同时服务静态文件）
 │   ├── apps/                 # 应用代码
 │   ├── config/               # 配置文件
 │   └── migrations/           # 数据库脚本
 ├── data/                      # 数据目录（持久化）
 │   ├── yprompt.db            # SQLite数据库
-│   ├── cache/                # 缓存文件
-│   ├── logs/                 # 日志文件
-│   │   ├── backend/          # 后端日志
-│   │   └── nginx/            # Nginx日志
-│   └── ssl/                  # SSL证书（可选）
-│       ├── fullchain.pem     # 证书链
-│       └── privkey.pem       # 私钥
-├── Dockerfile                 # Docker镜像
-├── docker-compose.yml         # Docker Compose配置
+│   └── logs/                 # 日志文件
+├── Dockerfile                 # Docker镜像（多阶段构建）
+├── docker-compose.yml         # Docker Compose配置（Traefik）
+├── docker-compose.local.yml   # 本地开发配置（直接暴露端口）
 └── start.sh                   # 容器启动脚本
 ```
 
 ## 快速启动
 
-### Docker Run
+### 方式一：使用 Traefik 反向代理（推荐生产环境）
+
+**前提条件**：已部署 Traefik 并创建 `traefik-network` 网络
+
+1. 创建环境变量文件：
+
+```bash
+cp env.example .env
+# 编辑 .env 文件，配置域名和密钥
+```
+
+2. 启动服务：
+
+```bash
+docker-compose up -d
+```
+
+3. 访问：`https://your-domain.com`
+
+### 方式二：本地开发/测试（直接暴露端口）
+
+```bash
+# 构建并启动
+docker-compose -f docker-compose.local.yml up -d --build
+
+# 访问
+http://localhost:8888
+```
+
+### 方式三：Docker Run（简单部署）
 
 ```bash
 docker run -d \
   --name yprompt \
-  -p 80:80 \
+  -p 8888:8888 \
   -v ./data:/app/data \
-  -e DOMAIN=yourdomain.com \
   -e SECRET_KEY=your-random-secret-key \
-  -e LINUX_DO_CLIENT_ID=your_client_id \
-  -e LINUX_DO_CLIENT_SECRET=your_client_secret \
-  -e LINUX_DO_REDIRECT_URI=https://yourdomain.com/auth/callback \
+  -e ADMIN_USERNAME=admin \
+  -e ADMIN_PASSWORD=your-password \
   ghcr.io/fish2018/yprompt:latest
 ```
 
-### Docker Compose
+## Traefik 配置示例
 
-创建 `docker-compose.yml`:
+### docker-compose.yml
 
 ```yaml
 version: '3.8'
@@ -83,23 +105,34 @@ services:
     image: ghcr.io/fish2018/yprompt:latest
     container_name: yprompt
     restart: unless-stopped
-    ports:
-      - "80:80"
-      - "443:443"
     volumes:
       - ./data:/app/data
     environment:
-      - DOMAIN=yourdomain.com
-      - SECRET_KEY=your-random-secret-key
+      - SECRET_KEY=your-secret-key
+      - ADMIN_USERNAME=admin
+      - ADMIN_PASSWORD=your-password
+      # Linux.do OAuth（可选）
       - LINUX_DO_CLIENT_ID=your_client_id
       - LINUX_DO_CLIENT_SECRET=your_client_secret
       - LINUX_DO_REDIRECT_URI=https://yourdomain.com/auth/callback
-```
+    labels:
+      - "traefik.enable=true"
+      # HTTP
+      - "traefik.http.routers.yprompt.rule=Host(`yourdomain.com`)"
+      - "traefik.http.routers.yprompt.entrypoints=web"
+      # HTTPS
+      - "traefik.http.routers.yprompt-secure.rule=Host(`yourdomain.com`)"
+      - "traefik.http.routers.yprompt-secure.entrypoints=websecure"
+      - "traefik.http.routers.yprompt-secure.tls=true"
+      - "traefik.http.routers.yprompt-secure.tls.certresolver=letsencrypt"
+      # 服务端口
+      - "traefik.http.services.yprompt.loadbalancer.server.port=8888"
+    networks:
+      - traefik-network
 
-启动：
-
-```bash
-docker-compose up -d
+networks:
+  traefik-network:
+    external: true
 ```
 
 ## 环境变量说明
@@ -114,14 +147,16 @@ docker-compose up -d
 
 | 变量 | 默认值 | 说明 |
 |------|--------|------|
-| `DOMAIN` | `localhost` | 域名或IP地址 |
+| `YPROMPT_HOST` | `0.0.0.0` | 监听地址 |
+| `YPROMPT_PORT` | `8888` | 监听端口 |
+| `DOMAIN` | `localhost` | 域名（Traefik 路由用） |
 
 ### 数据库配置
 
 | 变量 | 默认值 | 说明 |
 |------|--------|------|
 | `DB_TYPE` | `sqlite` | 数据库类型：`sqlite` 或 `mysql` |
-| `SQLITE_DB_PATH` | `../data/yprompt.db` | SQLite数据库文件路径 |
+| `SQLITE_DB_PATH` | `/app/data/yprompt.db` | SQLite数据库文件路径 |
 | `DB_HOST` | `localhost` | MySQL主机地址 |
 | `DB_USER` | `root` | MySQL用户名 |
 | `DB_PASS` | - | MySQL密码 |
@@ -145,25 +180,48 @@ docker-compose up -d
 | `ADMIN_USERNAME` | `admin` | 默认管理员用户名 |
 | `ADMIN_PASSWORD` | `admin123` | 默认管理员密码 |
 
-### 健康检查配置
+### Traefik 配置
 
 | 变量 | 默认值 | 说明 |
 |------|--------|------|
-| `HEALTH_CHECK_INTERVAL` | `30` | 健康检查间隔（秒） |
-| `HEALTH_CHECK_TIMEOUT` | `10` | 健康检查超时（秒） |
-| `HEALTH_CHECK_RETRIES` | `3` | 健康检查重试次数 |
+| `TRAEFIK_NETWORK` | `traefik-network` | Traefik 网络名称 |
+| `CERT_RESOLVER` | `letsencrypt` | SSL证书解析器 |
 
-## HTTPS配置
+## GitHub Actions 自动构建
 
-将SSL证书放置在数据目录：
+项目已配置 GitHub Actions 工作流，在以下情况自动构建 Docker 镜像：
+
+- 推送到 `main`/`master` 分支
+- 创建版本标签（如 `v1.0.0`）
+- 手动触发
+
+镜像会自动推送到 GitHub Container Registry：
 
 ```bash
-data/ssl/
-├── fullchain.pem    # 完整证书链
-└── privkey.pem      # 私钥
+# 拉取最新镜像
+docker pull ghcr.io/your-username/yprompt:latest
+
+# 拉取指定版本
+docker pull ghcr.io/your-username/yprompt:v1.0.0
 ```
 
-容器启动时会自动检测并启用HTTPS。
+## 本地开发
+
+### 前端开发
+
+```bash
+cd frontend
+npm install
+npm run dev
+```
+
+### 后端开发
+
+```bash
+cd backend
+pip install -r requirements.txt
+python run.py
+```
 
 ## 许可证
 
